@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HBR Praktijkcoach</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <style>
+        .compact-chat {
+            width: 100%;
+            max-width: 400px;
+            height: 600px;
+            margin: 20px auto;
+            border: 2px solid #f97316;
+            border-radius: 12px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.15);
+            background: white;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+        }
+        
+        @media (max-width: 640px) {
+            .compact-chat {
+                width: 95%;
+                height: 90vh;
+                margin: 10px auto;
+            }
+        }
+        
+        .message-container {
+            scrollbar-width: thin;
+            scrollbar-color: #f97316 #f3f4f6;
+        }
+        
+        .message-container::-webkit-scrollbar {
+            width: 6px;
+        }
+        
+        .message-container::-webkit-scrollbar-track {
+            background: #f3f4f6;
+        }
+        
+        .message-container::-webkit-scrollbar-thumb {
+            background: #f97316;
+            border-radius: 3px;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen flex items-center justify-center p-4">
+
+<div id="app"></div>
+
+<script>
+// Simple React-like framework for this app
+const { useState, useEffect, createElement: h } = {
+    useState: (initial) => {
+        const state = { current: initial };
+        const setState = (newValue) => {
+            state.current = typeof newValue === 'function' ? newValue(state.current) : newValue;
+            render();
+        };
+        return [() => state.current, setState];
+    },
+    useEffect: (effect, deps) => {
+        effect();
+    },
+    createElement: (tag, props, ...children) => {
+        const element = document.createElement(tag);
+        if (props) {
+            Object.entries(props).forEach(([key, value]) => {
+                if (key.startsWith('on') && typeof value === 'function') {
+                    element.addEventListener(key.slice(2).toLowerCase(), value);
+                } else if (key === 'className') {
+                    element.className = value;
+                } else if (key === 'style' && typeof value === 'object') {
+                    Object.assign(element.style, value);
+                } else {
+                    element.setAttribute(key, value);
+                }
+            });
+        }
+        children.flat().forEach(child => {
+            if (typeof child === 'string' || typeof child === 'number') {
+                element.appendChild(document.createTextNode(child));
+            } else if (child instanceof Node) {
+                element.appendChild(child);
+            }
+        });
+        return element;
+    }
+};
+
+// App state
+const [getMessages, setMessages] = useState([]);
+const [getInputValue, setInputValue] = useState('');
+const [getStudentNumber, setStudentNumber] = useState('');
+const [getIsLoggedIn, setIsLoggedIn] = useState(false);
+const [getCurrentMenu, setCurrentMenu] = useState('');
+const [getHasAskedMenu, setHasAskedMenu] = useState(false);
+
+// Knowledge base
+const knowledgeBase = {
+    ingredienten: {
+        'mirepoix': {
+            description: 'Mengsel van wortel, ui en selderij in gelijke delen.',
+            usage: 'Basis voor soepen en sauzen'
+        },
+        'tarwegluten': {
+            description: 'Eiwit uit tarwe dat elasticiteit geeft aan deeg.',
+            usage: 'Voor broodstructuur'
+        },
+        'roux': {
+            description: 'Boter en bloem samen bakken voor sauzen.',
+            usage: 'Sauzen dikker maken'
+        }
+    },
+    snijtechnieken: {
+        'brunoise': {
+            description: 'Fijne blokjes van 2-3mm.',
+            veiligheid: 'Vingers krom houden!'
+        },
+        'julienne': {
+            description: 'Fijne reepjes 4cm x 2-3mm.',
+            veiligheid: 'Rustig aan!'
+        }
+    }
+};
+
+const menuDatabase = {
+    '21': { title: 'Paprikasoep, paella, crema catalana', technieken: ['Brunoise'] },
+    '22': { title: 'Courgettekoekjes, bruschetta, carbonara', technieken: ['Grillen'] },
+    '23': { title: 'Pannenkoekrolletjes, kip, dauphinoise', technieken: ['Carré'] },
+    '24': { title: 'Groentesoep, gehaktbrood, glaceerde wortel', technieken: ['Julienne'] },
+    '25': { title: 'Tomatensoep, gevulde pasta', technieken: ['Pasta maken'] }
+};
+
+// Message analysis
+function analyzeMessage(message) {
+    const lower = message.toLowerCase().trim();
+    
+    const menuMatch = lower.match(/menu\s*(\d+)/);
+    if (menuMatch && !getCurrentMenu()) {
+        return { type: 'menu_detection', menuNumber: menuMatch[1] };
+    }
+
+    if (['mes', 'snijden', 'frituur', 'oven', 'heet'].some(w => lower.includes(w))) {
+        return { type: 'veiligheid' };
+    }
+
+    const patterns = {
+        reproductie: /wat is|wat zijn|definitie/,
+        training: /is dit goed|klopt dit|wat moet ik nu/,
+        transfer: /hoe groot|hoe dik|waarom/,
+        inzicht: /planning|wat eerst|volgorde/
+    };
+
+    for (const [level, pattern] of Object.entries(patterns)) {
+        if (pattern.test(lower)) {
+            return { type: level, level };
+        }
+    }
+
+    for (const [category, items] of Object.entries(knowledgeBase)) {
+        for (const [item, info] of Object.entries(items)) {
+            if (lower.includes(item)) {
+                return { 
+                    type: category.slice(0, -1), 
+                    item, 
+                    info,
+                    level: category === 'ingredienten' ? 'reproductie' : 'transfer'
+                };
+            }
+        }
+    }
+
+    return { type: 'algemeen' };
+}
+
+// Response generation
+function generateResponse(analysis) {
+    if (!getCurrentMenu() && !getHasAskedMenu() && analysis.type !== 'menu_detection') {
+        setHasAskedMenu(true);
+        return {
+            text: 'Hoi! Welk menu heb je vandaag?',
+            followUp: 'Typ "menu 23"',
+            rttiLevel: 'start'
+        };
+    }
+
+    const responses = {
+        menu_detection: () => {
+            const num = analysis.menuNumber;
+            setCurrentMenu(num);
+            const menu = menuDatabase[num];
+            return menu ? {
+                text: `Menu ${num}: ${menu.title}`,
+                followUp: `Technieken: ${menu.technieken.join(', ')}`,
+                rttiLevel: 'info'
+            } : {
+                text: `Menu ${num} genoteerd!`,
+                followUp: 'Lees je recept door!',
+                rttiLevel: 'info'
+            };
+        },
+        veiligheid: () => ({
+            text: '⚠️ STOP! Veiligheid eerst!',
+            followUp: 'Roep de docent!',
+            isUrgent: true
+        }),
+        reproductie: () => ({
+            text: 'Check je recept voor de exacte informatie',
+            followUp: 'Specifieke details staan daar!',
+            rttiLevel: 'R'
+        }),
+        training: () => ({
+            text: 'Vergelijk met je recept',
+            followUp: 'Lijkt het erop? Dan goed!',
+            rttiLevel: 'T1'
+        }),
+        transfer: () => ({
+            text: 'Welke techniek staat in je recept?',
+            followUp: 'Brunoise, julienne, etc?',
+            rttiLevel: 'T2'
+        }),
+        inzicht: () => ({
+            text: 'Wat duurt het langst?',
+            followUp: 'Daarmee beginnen!',
+            rttiLevel: 'I'
+        }),
+        ingredient: () => ({
+            text: `${analysis.item}: ${analysis.info.description}`,
+            followUp: `Gebruik: ${analysis.info.usage}`,
+            rttiLevel: 'R'
+        }),
+        snijtechniek: () => ({
+            text: `${analysis.item}: ${analysis.info.description}`,
+            followUp: `Veiligheid: ${analysis.info.veiligheid}`,
+            rttiLevel: 'T2'
+        }),
+        algemeen: () => ({
+            text: 'Check je recept!',
+            followUp: 'Specifieke vraag?',
+            rttiLevel: 'help'
+        })
+    };
+
+    return (responses[analysis.type] || responses.algemeen)();
+}
+
+// Send message
+function handleSendMessage() {
+    const input = getInputValue().trim();
+    if (!input) return;
+
+    const userMsg = { type: 'user', content: input, timestamp: Date.now() };
+    const analysis = analyzeMessage(input);
+    const response = generateResponse(analysis);
+    const botMsg = { type: 'bot', ...response, timestamp: Date.now() };
+
+    setMessages(prev => [...prev, userMsg, botMsg]);
+    setInputValue('');
+    
+    setTimeout(() => {
+        const container = document.querySelector('.message-container');
+        if (container) container.scrollTop = container.scrollHeight;
+    }, 100);
+}
+
+// Login
+function handleLogin() {
+    const num = getStudentNumber();
+    if (num.length >= 3) {
+        setIsLoggedIn(true);
+        const isTeacher = ['docent', 'test'].includes(num.toLowerCase());
+        const isGuest = num.toLowerCase() === 'gast';
+        
+        let welcome = 'Hoi! Ik ben je praktijkcoach. Welk menu?';
+        if (isTeacher) welcome = 'Hallo docent! Testmodus actief.';
+        else if (isGuest) welcome = 'Welkom! Welk menu heb je?';
+        
+        setMessages([{
+            type: 'bot',
+            text: welcome,
+            followUp: 'Test: "Wat is mirepoix?" vs "Hoe groot snijden?"',
+            timestamp: Date.now(),
+            rttiLevel: 'intro'
+        }]);
+    }
+}
+
+// Create elements
+function createMessage(message, index) {
+    const isUser = message.type === 'user';
+    const messageDiv = h('div', {
+        className: `flex ${isUser ? 'justify-end' : 'justify-start'} mb-2`
+    });
+
+    const contentDiv = h('div', {
+        className: `max-w-xs px-3 py-2 rounded-lg text-sm ${
+            isUser ? 'bg-orange-500 text-white' : 
+            message.isUrgent ? 'bg-red-100 border border-red-300' : 'bg-white border shadow-sm'
+        }`
+    });
+
+    const textDiv = h('div', {
+        className: message.isUrgent ? 'text-red-700 font-bold' : ''
+    }, message.text || message.content);
+
+    contentDiv.appendChild(textDiv);
+
+    if (message.rttiLevel && !isUser) {
+        const colors = {
+            'R': 'bg-blue-400', 'T1': 'bg-green-400', 'T2': 'bg-yellow-400', 'I': 'bg-purple-400'
+        };
+        const label = h('div', { className: 'mt-1' },
+            h('span', {
+                className: `inline-block px-2 py-1 rounded text-white text-xs font-bold ${colors[message.rttiLevel] || 'bg-gray-400'}`
+            }, message.rttiLevel)
+        );
+        contentDiv.appendChild(label);
+    }
+
+    if (message.followUp) {
+        const followUpDiv = h('div', {
+            className: `mt-2 p-2 rounded text-xs ${
+                message.isUrgent ? 'bg-red-50 text-red-600' : 'bg-blue-50 text-blue-600'
+            }`
+        }, message.followUp);
+        contentDiv.appendChild(followUpDiv);
+    }
+
+    messageDiv.appendChild(contentDiv);
+    return messageDiv;
+}
+
+function createQuickButton(text, label, color) {
+    return h('button', {
+        className: `flex-1 ${color} px-2 py-1 rounded text-xs hover:opacity-75`,
+        onclick: () => setInputValue(text)
+    }, label);
+}
+
+// Main render function
+function render() {
+    const app = document.getElementById('app');
+    app.innerHTML = '';
+
+    if (!getIsLoggedIn()) {
+        const loginDiv = h('div', { className: 'compact-chat' },
+            h('div', { className: 'bg-orange-500 text-white p-3 rounded-t-lg' },
+                h('h1', { className: 'font-bold text-center' }, 'HBR Praktijkcoach')
+            ),
+            h('div', { className: 'flex-1 p-4 flex flex-col justify-center' },
+                h('div', { className: 'text-center mb-4' },
+                    h('h2', { className: 'text-lg font-bold text-orange-600 mb-1' }, 'Praktijkcoach'),
+                    h('p', { className: 'text-xs text-gray-600' }, 'VMBO HBR + RTTI')
+                ),
+                h('div', { className: 'space-y-3' },
+                    h('input', {
+                        type: 'text',
+                        placeholder: 'Leerlingnummer of "gast"',
+                        className: 'w-full p-3 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-orange-500',
+                        value: getStudentNumber(),
+                        oninput: (e) => setStudentNumber(e.target.value),
+                        onkeypress: (e) => e.key === 'Enter' && handleLogin()
+                    }),
+                    h('button', {
+                        className: 'w-full bg-orange-500 text-white p-3 rounded hover:bg-orange-600 disabled:bg-gray-300 transition-colors',
+                        onclick: handleLogin,
+                        disabled: getStudentNumber().length < 3
+                    }, 'Start Coach')
+                )
+            )
+        );
+        app.appendChild(loginDiv);
+        return;
+    }
+
+    const chatDiv = h('div', { className: 'compact-chat' },
+        h('div', { className: 'bg-orange-500 text-white p-3 rounded-t-lg flex justify-between items-center' },
+            h('div', { className: 'flex items-center space-x-2' },
+                h('h1', { className: 'font-bold text-sm' }, 'HBR Praktijkcoach'),
+                getCurrentMenu() ? h('div', { className: 'bg-orange-600 px-2 py-1 rounded text-xs' }, `Menu ${getCurrentMenu()}`) : null
+            )
+        ),
+        h('div', { className: 'flex-1 overflow-y-auto p-3 space-y-2 bg-gray-50 message-container' },
+            ...getMessages().map(createMessage)
+        ),
+        h('div', { className: 'border-t bg-white p-3' },
+            h('div', { className: 'flex space-x-1 mb-2' },
+                createQuickButton('Wat is mirepoix?', 'R', 'bg-blue-100 text-blue-700'),
+                createQuickButton('Is dit goed?', 'T1', 'bg-green-100 text-green-700'),
+                createQuickButton('Hoe groot snijden?', 'T2', 'bg-yellow-100 text-yellow-700'),
+                createQuickButton('Planning maken?', 'I', 'bg-purple-100 text-purple-700')
+            ),
+            h('div', { className: 'flex space-x-2' },
+                h('input', {
+                    type: 'text',
+                    placeholder: 'Stel je vraag...',
+                    className: 'flex-1 p-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-orange-500',
+                    value: getInputValue(),
+                    oninput: (e) => setInputValue(e.target.value),
+                    onkeypress: (e) => e.key === 'Enter' && handleSendMessage()
+                }),
+                h('button', {
+                    className: 'bg-orange-500 text-white px-4 py-2 rounded hover:bg-orange-600 transition-colors',
+                    onclick: handleSendMessage
+                }, '→')
+            )
+        )
+    );
+
+    app.appendChild(chatDiv);
+}
+
+// Initial render
+render();
+</script>
+
+</body>
+</html>
