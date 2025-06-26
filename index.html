@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="nl">
 <head>
@@ -174,7 +173,11 @@ let appState = {
     isLoggedIn: false,
     currentMenu: '',
     hasAskedMenu: false,
-    isMinimized: false
+    isMinimized: false,
+    askedQuestions: new Set(),
+    questionDepth: {},
+    awaitingAnswer: null, // Track if we're waiting for student's answer
+    currentTechnique: null // Track which technique we're teaching
 };
 
 let currentInput = null;
@@ -199,23 +202,49 @@ const knowledgeBase = {
             description: 'Eigeel met room voor het binden van soepen.',
             usage: 'Soep dikker maken',
             warning: 'Niet laten koken! Eigeel stolt dan!'
+        },
+        'tofu': {
+            description: 'Eiwitrijk product gemaakt van sojabonen.',
+            usage: 'Vleesvervanger, neemt smaken goed op',
+            tips: 'Marineren voor meer smaak, kan gebakken, gegrild of gestoomd worden'
+        },
+        'sojasaus': {
+            description: 'Zoute, donkere saus gemaakt van gefermenteerde sojabonen.',
+            usage: 'Voor smaak en kleur in Aziatische gerechten'
+        },
+        'sesamolie': {
+            description: 'Aromatische olie gemaakt van sesamzaadjes.',
+            usage: 'Voor smaak, niet voor bakken - aan eind toevoegen'
+        },
+        'miso': {
+            description: 'Gefermenteerde sojabonen pasta, zeer smaakrijk.',
+            usage: 'Voor umami smaak in soepen en marinades'
         }
     },
     snijtechnieken: {
         'brunoise': {
             description: 'Fijne blokjes van 2-3mm.',
             steps: 'Eerst in plakjes, dan in reepjes, dan dwars snijden voor blokjes',
-            veiligheid: 'Vingers krom houden! Mes van je af!'
+            veiligheid: 'Vingers krom houden! Mes van je af!',
+            tips: ['Gelijkmatige stukjes', 'Scherp mes gebruiken', 'Rustig aan doen']
         },
         'julienne': {
             description: 'Fijne reepjes 4cm x 2-3mm. Denk aan lucifer vorm.',
             steps: 'Eerst in plakjes snijden, daarna in reepjes',
-            veiligheid: 'Rustig aan, veiligheid eerst!'
+            veiligheid: 'Rustig aan, veiligheid eerst!',
+            tips: ['Gelijke dikte belangrijk', 'Stevig op snijplank', 'Krom vingers']
         },
         'carré': {
             description: 'Vierkante blokjes van ongeveer 1cm.',
             steps: 'Groter dan brunoise, gelijkmatig snijden',
-            veiligheid: 'Stabiele snijplank, scherp mes!'
+            veiligheid: 'Stabiele snijplank, scherp mes!',
+            tips: ['Groter dan brunoise', 'Regelmatige vorm', 'Check je recept voor exacte maat']
+        },
+        'chiffonade': {
+            description: 'Fijne reepjes van bladgroenten zoals basilicum.',
+            steps: 'Bladeren stapelen, oprollen, fijn snijden',
+            veiligheid: 'Scherp mes, voorzichtig met vingers',
+            tips: ['Droge bladeren', 'Stevig oprollen', 'Haars fijn snijden']
         }
     },
     kooktechnieken: {
@@ -269,9 +298,14 @@ function createElement(tag, props = {}, ...children) {
     return element;
 }
 
-// Message analysis with RTTI logic (internal use only)
+// Message analysis with interactive teaching flow
 function analyzeMessage(message) {
     const lower = message.toLowerCase().trim();
+    
+    // Check if we're in an interactive teaching session
+    if (appState.awaitingAnswer && appState.currentTechnique) {
+        return handleTeachingResponse(lower, appState.currentTechnique, appState.awaitingAnswer);
+    }
     
     const menuMatch = lower.match(/menu\s*(\d+)/);
     if (menuMatch && !appState.currentMenu) {
@@ -286,14 +320,13 @@ function analyzeMessage(message) {
     for (const [category, items] of Object.entries(knowledgeBase)) {
         for (const [item, info] of Object.entries(items)) {
             if (lower.includes(item)) {
-                // Determine RTTI level based on question type
-                let rttiLevel = 'reproductie'; // Default for ingredients
+                let rttiLevel = 'reproductie';
                 
                 if (category !== 'ingredienten') {
                     if (lower.includes('hoe') || lower.includes('stappen') || lower.includes('maken')) {
-                        rttiLevel = 'transfer'; // How-to questions need socratic approach
+                        rttiLevel = 'transfer';
                     } else if (lower.includes('wat is') || lower.includes('definitie')) {
-                        rttiLevel = 'reproductie'; // Direct definition questions
+                        rttiLevel = 'reproductie';
                     } else {
                         rttiLevel = 'transfer';
                     }
@@ -326,7 +359,116 @@ function analyzeMessage(message) {
     return { type: 'algemeen', rttiLevel: 'training' };
 }
 
-// Response generation with RTTI-based pedagogy
+// Handle responses during interactive teaching
+function handleTeachingResponse(userAnswer, technique, expectedStage) {
+    const info = knowledgeBase.snijtechnieken[technique];
+    
+    if (expectedStage === 'shape') {
+        // Check if they know it's blocks or strips
+        const isCorrect = 
+            (technique === 'brunoise' && (userAnswer.includes('blok') || userAnswer.includes('dobbelstenen') || userAnswer.includes('kleine stukjes'))) ||
+            (technique === 'carré' && (userAnswer.includes('blok') || userAnswer.includes('vierkant') || userAnswer.includes('stukjes'))) ||
+            (technique === 'julienne' && (userAnswer.includes('reep') || userAnswer.includes('staaf') || userAnswer.includes('dunne stukjes'))) ||
+            (technique === 'chiffonade' && (userAnswer.includes('reep') || userAnswer.includes('strook') || userAnswer.includes('lint')));
+            
+        if (isCorrect) {
+            // Correct! Now ask about size
+            appState.awaitingAnswer = 'size';
+            return {
+                type: 'teaching_correct',
+                technique,
+                stage: 'size',
+                text: `Goed zo! Het zijn inderdaad ${technique === 'julienne' || technique === 'chiffonade' ? 'reepjes' : 'blokjes'}.`,
+                followUp: `Nu de moeilijke vraag: weet je nog hoe groot ze moeten zijn? Probeer het eens!`
+            };
+        } else {
+            // Wrong, give hint and ask again
+            appState.awaitingAnswer = 'shape_hint';
+            const shapeHint = technique === 'julienne' || technique === 'chiffonade' ? 'reepjes' : 'blokjes';
+            return {
+                type: 'teaching_hint',
+                technique,
+                stage: 'shape_hint',
+                text: `Bijna goed! ${technique} zijn ${shapeHint}.`,
+                followUp: `Weet je nu wat voor vorm het zijn? Probeer nogmaals: blokjes of reepjes?`
+            };
+        }
+    }
+    
+    if (expectedStage === 'shape_hint') {
+        // Second chance for shape
+        const shapeAnswer = technique === 'julienne' || technique === 'chiffonade' ? 'reepjes' : 'blokjes';
+        appState.awaitingAnswer = 'size';
+        return {
+            type: 'teaching_correct',
+            technique,
+            stage: 'size',
+            text: `Precies! ${technique} zijn ${shapeAnswer}.`,
+            followUp: `En weet je ook hoe groot ze moeten zijn?`
+        };
+    }
+    
+    if (expectedStage === 'size') {
+        // Check size knowledge
+        const sizePatterns = {
+            'brunoise': ['2mm', '3mm', '2-3mm', 'heel klein', 'dobbelsteentjes'],
+            'carré': ['1cm', 'centimeter', 'groter dan brunoise'],
+            'julienne': ['4cm', '2mm', '3mm', 'lucifer', 'dunne reepjes'],
+            'chiffonade': ['dun', 'heel dun', 'fijn', 'haardun']
+        };
+        
+        const correctPatterns = sizePatterns[technique] || [];
+        const isCorrect = correctPatterns.some(pattern => userAnswer.includes(pattern));
+        
+        if (isCorrect) {
+            // They know it! Complete the lesson
+            appState.awaitingAnswer = null;
+            appState.currentTechnique = null;
+            return {
+                type: 'teaching_complete',
+                technique,
+                text: `Perfect! Je weet het goed.`,
+                followUp: `${technique}: ${info.description}. Veiligheid: ${info.veiligheid}. Goed bezig!`
+            };
+        } else {
+            // Don't know size, teach it and check understanding
+            appState.awaitingAnswer = 'check_understanding';
+            return {
+                type: 'teaching_explain',
+                technique,
+                stage: 'explain',
+                text: `${technique}: ${info.description}`,
+                followUp: `Nu ik je geholpen heb, weet je nu hoe groot ${technique} moet zijn?`
+            };
+        }
+    }
+    
+    if (expectedStage === 'check_understanding') {
+        // Final check after explanation
+        appState.awaitingAnswer = null;
+        appState.currentTechnique = null;
+        
+        if (userAnswer.includes('ja') || userAnswer.includes('snap') || userAnswer.includes('begrijp')) {
+            return {
+                type: 'teaching_success',
+                technique,
+                text: `Geweldig! Dan kun je aan de slag.`,
+                followUp: `Vergeet niet: ${info.veiligheid} Succes met ${technique}!`
+            };
+        } else {
+            return {
+                type: 'teaching_refer',
+                technique,
+                text: `Geen probleem, dit is lastig!`,
+                followUp: `Stel deze vraag aan de docent voor een praktische demonstratie. Daar leer je het het beste van!`
+            };
+        }
+    }
+    
+    return { type: 'algemeen', rttiLevel: 'training' };
+}
+
+// Response generation with RTTI-based pedagogy and progressive disclosure
 function generateResponse(analysis) {
     if (!appState.currentMenu && !appState.hasAskedMenu && analysis.type !== 'menu_detection') {
         appState.hasAskedMenu = true;
@@ -335,6 +477,14 @@ function generateResponse(analysis) {
             followUp: 'Typ bijvoorbeeld "menu 23"'
         };
     }
+
+    // Track question frequency for progressive responses
+    const questionKey = analysis.item || analysis.type;
+    if (!appState.questionDepth[questionKey]) {
+        appState.questionDepth[questionKey] = 0;
+    }
+    appState.questionDepth[questionKey]++;
+    const askCount = appState.questionDepth[questionKey];
 
     const responses = {
         menu_detection: () => {
@@ -356,78 +506,169 @@ function generateResponse(analysis) {
             isUrgent: true
         }),
 
-        // REPRODUCTIE responses - Direct answers for ingredients
-        reproductie: () => ({
-            text: 'Check je recept voor de exacte informatie',
-            followUp: 'Specifieke details zoals hoeveelheden en temperaturen staan daar!',
-        }),
+        // REPRODUCTIE responses - Always give direct answers for ingredients
+        reproductie: () => {
+            if (askCount === 1) {
+                return {
+                    text: 'Check je recept voor de exacte informatie',
+                    followUp: 'Specifieke details zoals hoeveelheden en temperaturen staan daar!'
+                };
+            } else {
+                return {
+                    text: 'Ik zie dat je dit al eerder vroeg. Laat me je helpen!',
+                    followUp: 'Voor specifieke ingrediënten kan ik je meer vertellen. Welk ingrediënt precies?'
+                };
+            }
+        },
 
-        // TRAINING responses - Step-by-step guidance
-        training: () => ({
-            text: 'Vergelijk wat je hebt gemaakt met je recept',
-            followUp: 'Lijkt het op de beschrijving? Dan ben je goed bezig! Twijfel je? Laat het de docent zien!'
-        }),
+        // TRAINING responses - Progressive help
+        training: () => {
+            if (askCount === 1) {
+                return {
+                    text: 'Vergelijk wat je hebt gemaakt met je recept',
+                    followUp: 'Lijkt het op de beschrijving? Dan ben je goed bezig!'
+                };
+            } else {
+                return {
+                    text: 'Nog steeds onzeker? Dat is normaal!',
+                    followUp: 'Laat het de docent zien voor een tweede mening. Zo leer je het beste!'
+                };
+            }
+        },
 
-        // TRANSFER responses - Socratic questions
-        transfer: () => ({
-            text: 'Interessante vraag! Welke snijtechniek staat er in je recept?',
-            followUp: 'Woorden zoals "brunoise", "julienne" of "in stukjes van X cm" geven de maat aan. Wat zie je daar staan?'
-        }),
+        // TRANSFER responses - Progressive socratic questioning
+        transfer: () => {
+            if (askCount === 1) {
+                return {
+                    text: 'Interessante vraag! Welke snijtechniek staat er in je recept?',
+                    followUp: 'Woorden zoals "brunoise", "julienne" of "in stukjes van X cm" geven de maat aan.'
+                };
+            } else {
+                return {
+                    text: 'Ik merk dat je hier moeite mee hebt. Laat me je wat meer helpen.',
+                    followUp: 'Welke specifieke techniek snap je niet? Dan kan ik het uitleggen.'
+                };
+            }
+        },
 
-        // INZICHT responses - Analytical thinking
-        inzicht: () => ({
-            text: 'Goede planning-vraag! Wat duurt het langst in je menu?',
-            followUp: 'Strategie: langste tijd eerst starten. Ovenschotels vroeg, snelle dingen laatste moment. Hoe ga jij het aanpakken?'
-        }),
+        // INZICHT responses - Build analytical thinking
+        inzicht: () => {
+            if (askCount === 1) {
+                return {
+                    text: 'Goede planning-vraag! Wat duurt het langst in je menu?',
+                    followUp: 'Strategie: langste tijd eerst starten. Hoe ga jij het aanpakken?'
+                };
+            } else {
+                return {
+                    text: 'Planning is lastig! Laten we het stap voor stap doen.',
+                    followUp: 'Maak een lijstje: wat moet in de oven, wat op het vuur, wat kan koud? Dan zie je de volgorde vanzelf.'
+                };
+            }
+        },
 
-        // Specific item responses based on RTTI level
+        // Specific item responses - ALWAYS helpful for ingredients
         ingredient: () => {
             const info = analysis.info;
-            // Ingredients always get direct answers (R-level)
             return {
                 text: `${analysis.item}: ${info.description}`,
-                followUp: `Gebruik: ${info.usage}. ${info.warning || 'Check je recept voor de juiste hoeveelheid!'}`
+                followUp: `Gebruik: ${info.usage}. ${info.tips ? 'Tip: ' + info.tips : ''} ${info.warning || ''}`
             };
         },
 
+        // Progressive technique help with interactive teaching
         snijtechniek: () => {
             const info = analysis.info;
-            if (analysis.rttiLevel === 'reproductie') {
-                // Direct definition
+            
+            if (askCount === 1 && analysis.rttiLevel === 'transfer') {
+                // First time: start interactive teaching
+                appState.awaitingAnswer = 'shape';
+                appState.currentTechnique = analysis.item;
                 return {
-                    text: `${analysis.item}: ${info.description}`,
-                    followUp: `Veiligheid: ${info.veiligheid}`
+                    text: `${analysis.item} - laten we dit samen uitzoeken!`,
+                    followUp: `Eerste vraag: zijn het blokjes of reepjes? Wat denk je?`
+                };
+            } else if (askCount === 2) {
+                // Second time: give some info but still ask
+                appState.awaitingAnswer = 'shape';
+                appState.currentTechnique = analysis.item;
+                return {
+                    text: `Oké, ik ga je helpen! ${analysis.item} is een snijtechniek.`,
+                    followUp: `Probeer eens: wat voor vorm denk je dat het zijn? Blokjes of reepjes?`
                 };
             } else {
-                // Socratic approach for how-to questions
+                // Third time or direct question: full explanation
                 return {
-                    text: `${analysis.item} - heb je je recept bekeken? Staat daar hoe groot je moet snijden?`,
-                    followUp: `${info.description}. Stappen: ${info.steps}. Begrijp je hoe je het gaat aanpakken?`
+                    text: `${analysis.item}: ${info.description}`,
+                    followUp: `Stappen: ${info.steps}. Veiligheid: ${info.veiligheid}. ${info.tips ? 'Tips: ' + info.tips.join(', ') : ''}`
                 };
             }
         },
+
+        // Handle interactive teaching responses
+        teaching_correct: () => ({
+            text: analysis.text,
+            followUp: analysis.followUp
+        }),
+
+        teaching_hint: () => ({
+            text: analysis.text,
+            followUp: analysis.followUp
+        }),
+
+        teaching_explain: () => ({
+            text: analysis.text,
+            followUp: analysis.followUp
+        }),
+
+        teaching_complete: () => ({
+            text: analysis.text,
+            followUp: analysis.followUp
+        }),
+
+        teaching_success: () => ({
+            text: analysis.text,
+            followUp: analysis.followUp
+        }),
+
+        teaching_refer: () => ({
+            text: analysis.text,
+            followUp: analysis.followUp
+        }),
 
         kooktechniek: () => {
             const info = analysis.info;
-            if (analysis.rttiLevel === 'reproductie') {
-                // Direct definition
-                return {
-                    text: `${analysis.item}: ${info.description}`,
-                    followUp: `Methode: ${info.steps}`
-                };
-            } else {
-                // Socratic for process questions
+            
+            if (askCount === 1 && analysis.rttiLevel === 'transfer') {
                 return {
                     text: `${analysis.item} - wat staat er in je recept over de timing?`,
-                    followUp: `${info.description}. ${info.timing || info.tips || ''} Snap je de stappen?`
+                    followUp: `Kijk eens naar de bereidingswijze. Staat daar iets over "${analysis.item}"?`
+                };
+            } else if (askCount === 2) {
+                return {
+                    text: `Laat me je wat meer vertellen. ${analysis.item}: ${info.description}`,
+                    followUp: `Begrijp je de techniek nu beter?`
+                };
+            } else {
+                return {
+                    text: `${analysis.item}: ${info.description}`,
+                    followUp: `Methode: ${info.steps}. ${info.timing || info.tips || ''}`
                 };
             }
         },
 
-        algemeen: () => ({
-            text: 'Heb je je recept goed gelezen?',
-            followUp: 'Veel antwoorden staan in je recept! Heb je een specifieke vraag over een techniek of ingrediënt?'
-        })
+        algemeen: () => {
+            if (askCount === 1) {
+                return {
+                    text: 'Heb je je recept goed gelezen?',
+                    followUp: 'Veel antwoorden staan in je recept! Heb je een specifieke vraag over een techniek of ingrediënt?'
+                };
+            } else {
+                return {
+                    text: 'Ik merk dat je hulp nodig hebt. Dat is helemaal oké!',
+                    followUp: 'Vraag me gerust naar specifieke ingrediënten, technieken of kookmethodes. Ik help je graag!'
+                };
+            }
+        }
     };
 
     return (responses[analysis.type] || responses.algemeen)();
