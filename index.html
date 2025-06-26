@@ -45,6 +45,14 @@
             background: #f97316;
             border-radius: 3px;
         }
+
+        /* Fix voor input focus */
+        input[type="text"] {
+            -webkit-user-select: text;
+            -moz-user-select: text;
+            -ms-user-select: text;
+            user-select: text;
+        }
     </style>
 </head>
 <body class="bg-gray-100 min-h-screen flex items-center justify-center p-4">
@@ -52,52 +60,18 @@
 <div id="app"></div>
 
 <script>
-// Simple React-like framework for this app
-const { useState, useEffect, createElement: h } = {
-    useState: (initial) => {
-        const state = { current: initial };
-        const setState = (newValue) => {
-            state.current = typeof newValue === 'function' ? newValue(state.current) : newValue;
-            render();
-        };
-        return [() => state.current, setState];
-    },
-    useEffect: (effect, deps) => {
-        effect();
-    },
-    createElement: (tag, props, ...children) => {
-        const element = document.createElement(tag);
-        if (props) {
-            Object.entries(props).forEach(([key, value]) => {
-                if (key.startsWith('on') && typeof value === 'function') {
-                    element.addEventListener(key.slice(2).toLowerCase(), value);
-                } else if (key === 'className') {
-                    element.className = value;
-                } else if (key === 'style' && typeof value === 'object') {
-                    Object.assign(element.style, value);
-                } else {
-                    element.setAttribute(key, value);
-                }
-            });
-        }
-        children.flat().forEach(child => {
-            if (typeof child === 'string' || typeof child === 'number') {
-                element.appendChild(document.createTextNode(child));
-            } else if (child instanceof Node) {
-                element.appendChild(child);
-            }
-        });
-        return element;
-    }
+// Simple state management
+let appState = {
+    messages: [],
+    inputValue: '',
+    studentNumber: '',
+    isLoggedIn: false,
+    currentMenu: '',
+    hasAskedMenu: false
 };
 
-// App state
-const [getMessages, setMessages] = useState([]);
-const [getInputValue, setInputValue] = useState('');
-const [getStudentNumber, setStudentNumber] = useState('');
-const [getIsLoggedIn, setIsLoggedIn] = useState(false);
-const [getCurrentMenu, setCurrentMenu] = useState('');
-const [getHasAskedMenu, setHasAskedMenu] = useState(false);
+// Input references for focus management
+let currentInput = null;
 
 // Knowledge base
 const knowledgeBase = {
@@ -113,6 +87,10 @@ const knowledgeBase = {
         'roux': {
             description: 'Boter en bloem samen bakken voor sauzen.',
             usage: 'Sauzen dikker maken'
+        },
+        'liaison': {
+            description: 'Eigeel met room voor het binden van soepen.',
+            usage: 'Soep dikker maken'
         }
     },
     snijtechnieken: {
@@ -123,6 +101,20 @@ const knowledgeBase = {
         'julienne': {
             description: 'Fijne reepjes 4cm x 2-3mm.',
             veiligheid: 'Rustig aan!'
+        },
+        'carré': {
+            description: 'Vierkante blokjes van 1cm.',
+            veiligheid: 'Stabiele snijplank!'
+        }
+    },
+    kooktechnieken: {
+        'blancheren': {
+            description: 'Kort koken, dan ijswater.',
+            method: 'Kokend water → groente → ijswater'
+        },
+        'glaceren': {
+            description: 'Glanzend maken met boter en honing.',
+            method: 'Eerst blancheren, dan glaceren'
         }
     }
 };
@@ -135,12 +127,44 @@ const menuDatabase = {
     '25': { title: 'Tomatensoep, gevulde pasta', technieken: ['Pasta maken'] }
 };
 
+// Helper functions
+function createElement(tag, props = {}, ...children) {
+    const element = document.createElement(tag);
+    
+    Object.entries(props).forEach(([key, value]) => {
+        if (key.startsWith('on') && typeof value === 'function') {
+            element.addEventListener(key.slice(2).toLowerCase(), value);
+        } else if (key === 'className') {
+            element.className = value;
+        } else if (key === 'style' && typeof value === 'object') {
+            Object.assign(element.style, value);
+        } else if (key !== 'ref') {
+            element.setAttribute(key, value);
+        }
+    });
+    
+    // Handle ref
+    if (props.ref) {
+        props.ref(element);
+    }
+    
+    children.flat().forEach(child => {
+        if (typeof child === 'string' || typeof child === 'number') {
+            element.appendChild(document.createTextNode(child));
+        } else if (child instanceof Node) {
+            element.appendChild(child);
+        }
+    });
+    
+    return element;
+}
+
 // Message analysis
 function analyzeMessage(message) {
     const lower = message.toLowerCase().trim();
     
     const menuMatch = lower.match(/menu\s*(\d+)/);
-    if (menuMatch && !getCurrentMenu()) {
+    if (menuMatch && !appState.currentMenu) {
         return { type: 'menu_detection', menuNumber: menuMatch[1] };
     }
 
@@ -179,8 +203,8 @@ function analyzeMessage(message) {
 
 // Response generation
 function generateResponse(analysis) {
-    if (!getCurrentMenu() && !getHasAskedMenu() && analysis.type !== 'menu_detection') {
-        setHasAskedMenu(true);
+    if (!appState.currentMenu && !appState.hasAskedMenu && analysis.type !== 'menu_detection') {
+        appState.hasAskedMenu = true;
         return {
             text: 'Hoi! Welk menu heb je vandaag?',
             followUp: 'Typ "menu 23"',
@@ -191,7 +215,7 @@ function generateResponse(analysis) {
     const responses = {
         menu_detection: () => {
             const num = analysis.menuNumber;
-            setCurrentMenu(num);
+            appState.currentMenu = num;
             const menu = menuDatabase[num];
             return menu ? {
                 text: `Menu ${num}: ${menu.title}`,
@@ -238,6 +262,11 @@ function generateResponse(analysis) {
             followUp: `Veiligheid: ${analysis.info.veiligheid}`,
             rttiLevel: 'T2'
         }),
+        kooktechniek: () => ({
+            text: `${analysis.item}: ${analysis.info.description}`,
+            followUp: `${analysis.info.method}`,
+            rttiLevel: 'T2'
+        }),
         algemeen: () => ({
             text: 'Check je recept!',
             followUp: 'Specifieke vraag?',
@@ -250,7 +279,7 @@ function generateResponse(analysis) {
 
 // Send message
 function handleSendMessage() {
-    const input = getInputValue().trim();
+    const input = appState.inputValue.trim();
     if (!input) return;
 
     const userMsg = { type: 'user', content: input, timestamp: Date.now() };
@@ -258,10 +287,16 @@ function handleSendMessage() {
     const response = generateResponse(analysis);
     const botMsg = { type: 'bot', ...response, timestamp: Date.now() };
 
-    setMessages(prev => [...prev, userMsg, botMsg]);
-    setInputValue('');
+    appState.messages = [...appState.messages, userMsg, botMsg];
+    appState.inputValue = '';
     
+    render();
+    
+    // Focus terug naar input
     setTimeout(() => {
+        if (currentInput) {
+            currentInput.focus();
+        }
         const container = document.querySelector('.message-container');
         if (container) container.scrollTop = container.scrollHeight;
     }, 100);
@@ -269,9 +304,9 @@ function handleSendMessage() {
 
 // Login
 function handleLogin() {
-    const num = getStudentNumber();
+    const num = appState.studentNumber;
     if (num.length >= 3) {
-        setIsLoggedIn(true);
+        appState.isLoggedIn = true;
         const isTeacher = ['docent', 'test'].includes(num.toLowerCase());
         const isGuest = num.toLowerCase() === 'gast';
         
@@ -279,31 +314,45 @@ function handleLogin() {
         if (isTeacher) welcome = 'Hallo docent! Testmodus actief.';
         else if (isGuest) welcome = 'Welkom! Welk menu heb je?';
         
-        setMessages([{
+        appState.messages = [{
             type: 'bot',
             text: welcome,
             followUp: 'Test: "Wat is mirepoix?" vs "Hoe groot snijden?"',
             timestamp: Date.now(),
             rttiLevel: 'intro'
-        }]);
+        }];
+        
+        render();
     }
 }
 
-// Create elements
+// Set quick message
+function setQuickMessage(text) {
+    appState.inputValue = text;
+    render();
+    // Focus input na update
+    setTimeout(() => {
+        if (currentInput) {
+            currentInput.focus();
+        }
+    }, 50);
+}
+
+// Create message element
 function createMessage(message, index) {
     const isUser = message.type === 'user';
-    const messageDiv = h('div', {
+    const messageDiv = createElement('div', {
         className: `flex ${isUser ? 'justify-end' : 'justify-start'} mb-2`
     });
 
-    const contentDiv = h('div', {
+    const contentDiv = createElement('div', {
         className: `max-w-xs px-3 py-2 rounded-lg text-sm ${
             isUser ? 'bg-orange-500 text-white' : 
             message.isUrgent ? 'bg-red-100 border border-red-300' : 'bg-white border shadow-sm'
         }`
     });
 
-    const textDiv = h('div', {
+    const textDiv = createElement('div', {
         className: message.isUrgent ? 'text-red-700 font-bold' : ''
     }, message.text || message.content);
 
@@ -313,8 +362,8 @@ function createMessage(message, index) {
         const colors = {
             'R': 'bg-blue-400', 'T1': 'bg-green-400', 'T2': 'bg-yellow-400', 'I': 'bg-purple-400'
         };
-        const label = h('div', { className: 'mt-1' },
-            h('span', {
+        const label = createElement('div', { className: 'mt-1' },
+            createElement('span', {
                 className: `inline-block px-2 py-1 rounded text-white text-xs font-bold ${colors[message.rttiLevel] || 'bg-gray-400'}`
             }, message.rttiLevel)
         );
@@ -322,7 +371,7 @@ function createMessage(message, index) {
     }
 
     if (message.followUp) {
-        const followUpDiv = h('div', {
+        const followUpDiv = createElement('div', {
             className: `mt-2 p-2 rounded text-xs ${
                 message.isUrgent ? 'bg-red-50 text-red-600' : 'bg-blue-50 text-blue-600'
             }`
@@ -334,10 +383,11 @@ function createMessage(message, index) {
     return messageDiv;
 }
 
+// Create quick button
 function createQuickButton(text, label, color) {
-    return h('button', {
+    return createElement('button', {
         className: `flex-1 ${color} px-2 py-1 rounded text-xs hover:opacity-75`,
-        onclick: () => setInputValue(text)
+        onclick: () => setQuickMessage(text)
     }, label);
 }
 
@@ -346,29 +396,34 @@ function render() {
     const app = document.getElementById('app');
     app.innerHTML = '';
 
-    if (!getIsLoggedIn()) {
-        const loginDiv = h('div', { className: 'compact-chat' },
-            h('div', { className: 'bg-orange-500 text-white p-3 rounded-t-lg' },
-                h('h1', { className: 'font-bold text-center' }, 'HBR Praktijkcoach')
+    if (!appState.isLoggedIn) {
+        const loginDiv = createElement('div', { className: 'compact-chat' },
+            createElement('div', { className: 'bg-orange-500 text-white p-3 rounded-t-lg' },
+                createElement('h1', { className: 'font-bold text-center' }, 'HBR Praktijkcoach')
             ),
-            h('div', { className: 'flex-1 p-4 flex flex-col justify-center' },
-                h('div', { className: 'text-center mb-4' },
-                    h('h2', { className: 'text-lg font-bold text-orange-600 mb-1' }, 'Praktijkcoach'),
-                    h('p', { className: 'text-xs text-gray-600' }, 'VMBO HBR + RTTI')
+            createElement('div', { className: 'flex-1 p-4 flex flex-col justify-center' },
+                createElement('div', { className: 'text-center mb-4' },
+                    createElement('h2', { className: 'text-lg font-bold text-orange-600 mb-1' }, 'Praktijkcoach'),
+                    createElement('p', { className: 'text-xs text-gray-600' }, 'VMBO HBR + RTTI')
                 ),
-                h('div', { className: 'space-y-3' },
-                    h('input', {
+                createElement('div', { className: 'space-y-3' },
+                    createElement('input', {
                         type: 'text',
                         placeholder: 'Leerlingnummer of "gast"',
                         className: 'w-full p-3 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-orange-500',
-                        value: getStudentNumber(),
-                        oninput: (e) => setStudentNumber(e.target.value),
-                        onkeypress: (e) => e.key === 'Enter' && handleLogin()
+                        value: appState.studentNumber,
+                        oninput: (e) => {
+                            appState.studentNumber = e.target.value;
+                        },
+                        onkeypress: (e) => {
+                            if (e.key === 'Enter') handleLogin();
+                        },
+                        ref: (el) => { if (el) el.focus(); }
                     }),
-                    h('button', {
+                    createElement('button', {
                         className: 'w-full bg-orange-500 text-white p-3 rounded hover:bg-orange-600 disabled:bg-gray-300 transition-colors',
                         onclick: handleLogin,
-                        disabled: getStudentNumber().length < 3
+                        disabled: appState.studentNumber.length < 3
                     }, 'Start Coach')
                 )
             )
@@ -377,33 +432,45 @@ function render() {
         return;
     }
 
-    const chatDiv = h('div', { className: 'compact-chat' },
-        h('div', { className: 'bg-orange-500 text-white p-3 rounded-t-lg flex justify-between items-center' },
-            h('div', { className: 'flex items-center space-x-2' },
-                h('h1', { className: 'font-bold text-sm' }, 'HBR Praktijkcoach'),
-                getCurrentMenu() ? h('div', { className: 'bg-orange-600 px-2 py-1 rounded text-xs' }, `Menu ${getCurrentMenu()}`) : null
+    // Main chat interface
+    const chatDiv = createElement('div', { className: 'compact-chat' },
+        createElement('div', { className: 'bg-orange-500 text-white p-3 rounded-t-lg flex justify-between items-center' },
+            createElement('div', { className: 'flex items-center space-x-2' },
+                createElement('h1', { className: 'font-bold text-sm' }, 'HBR Praktijkcoach'),
+                appState.currentMenu ? createElement('div', { className: 'bg-orange-600 px-2 py-1 rounded text-xs' }, `Menu ${appState.currentMenu}`) : null
             )
         ),
-        h('div', { className: 'flex-1 overflow-y-auto p-3 space-y-2 bg-gray-50 message-container' },
-            ...getMessages().map(createMessage)
+        createElement('div', { className: 'flex-1 overflow-y-auto p-3 space-y-2 bg-gray-50 message-container' },
+            ...appState.messages.map(createMessage)
         ),
-        h('div', { className: 'border-t bg-white p-3' },
-            h('div', { className: 'flex space-x-1 mb-2' },
+        createElement('div', { className: 'border-t bg-white p-3' },
+            createElement('div', { className: 'flex space-x-1 mb-2' },
                 createQuickButton('Wat is mirepoix?', 'R', 'bg-blue-100 text-blue-700'),
                 createQuickButton('Is dit goed?', 'T1', 'bg-green-100 text-green-700'),
                 createQuickButton('Hoe groot snijden?', 'T2', 'bg-yellow-100 text-yellow-700'),
                 createQuickButton('Planning maken?', 'I', 'bg-purple-100 text-purple-700')
             ),
-            h('div', { className: 'flex space-x-2' },
-                h('input', {
+            createElement('div', { className: 'flex space-x-2' },
+                createElement('input', {
                     type: 'text',
                     placeholder: 'Stel je vraag...',
                     className: 'flex-1 p-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-orange-500',
-                    value: getInputValue(),
-                    oninput: (e) => setInputValue(e.target.value),
-                    onkeypress: (e) => e.key === 'Enter' && handleSendMessage()
+                    value: appState.inputValue,
+                    oninput: (e) => {
+                        appState.inputValue = e.target.value;
+                    },
+                    onkeypress: (e) => {
+                        if (e.key === 'Enter') handleSendMessage();
+                    },
+                    ref: (el) => {
+                        currentInput = el;
+                        if (el) {
+                            // Focus after render
+                            setTimeout(() => el.focus(), 50);
+                        }
+                    }
                 }),
-                h('button', {
+                createElement('button', {
                     className: 'bg-orange-500 text-white px-4 py-2 rounded hover:bg-orange-600 transition-colors',
                     onclick: handleSendMessage
                 }, '→')
@@ -416,6 +483,10 @@ function render() {
 
 // Initial render
 render();
+</script>
+
+</body>
+</html>
 </script>
 
 </body>
